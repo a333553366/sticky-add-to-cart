@@ -1,0 +1,78 @@
+{% if template.name == 'product' %}
+  {% assign settings_data = app.metafields.sticky_cart.settings.value %}
+  {% assign is_enabled = settings_data.enabled %}
+  {% if is_enabled == nil %}{% assign is_enabled = true %}{% endif %}
+
+  {% if is_enabled %}
+  <div id="shopify-sticky-cart-bar" style="display: none; position: fixed; {% if settings_data.position == 'top' %}top: 0;{% else %}bottom: 0;{% endif %} left: 0; width: 100%; background: {{ settings_data.bgColor | default: '#ffffff' }}; color: {{ settings_data.textColor | default: '#111213' }}; box-shadow: 0 -2px 14px rgba(0,0,0,0.12); z-index: 999999; padding: 12px 20px; box-sizing: border-box;">
+    <div style="max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px;">
+      <div style="display: flex; align-items: center; gap: 14px; overflow: hidden;">
+        {% assign show_img = settings_data.showImage %}
+        {% if show_img == nil %}{% assign show_img = true %}{% endif %}
+        
+        {% if show_img and product.featured_image %}
+          <img src="{{ product.featured_image | image_url: width: 120 }}" style="width: 48px; height: 48px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(0,0,0,0.08);" alt="{{ product.title | escape }}" />
+        {% endif %}
+        <div>
+          <div style="font-weight: 600; font-size: 14px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; max-width: 320px; color: {{ settings_data.textColor | default: '#111213' }};">{{ product.title }}</div>
+          <div style="font-size: 13px; opacity: 0.85; color: {{ settings_data.textColor | default: '#111213' }};">{{ product.selected_or_first_available_variant.price | money }}</div>
+        </div>
+      </div>
+      
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <button id="sticky-submit-btn" type="button" style="background: {{ settings_data.btnColor | default: '#008060' }}; color: {{ settings_data.btnTextColor | default: '#ffffff' }}; border: none; padding: 10px 26px; border-radius: 6px; font-weight: 700; cursor: pointer; white-space: nowrap; font-size: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+          {{ settings_data.btnText | default: 'Add to Cart' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const bar = document.getElementById("shopify-sticky-cart-bar");
+      const btn = document.getElementById("sticky-submit-btn");
+      if (!bar || !btn) return;
+
+      const variantId = {{ product.selected_or_first_available_variant.id | default: 'null' }};
+
+      window.addEventListener("scroll", function() {
+        if (window.scrollY > 250) {
+          bar.style.display = "block";
+        } else {
+          bar.style.display = "none";
+        }
+      });
+
+      btn.addEventListener("click", function() {
+        if (!variantId) return;
+        btn.innerText = "Adding...";
+        btn.disabled = true;
+
+        fetch('/cart/add.js', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: [{ id: variantId, quantity: 1 }] })
+        })
+        .then(res => res.json())
+        .then(() => {
+          btn.innerText = "Added!";
+          setTimeout(() => {
+            window.location.href = "/cart";
+          }, 400);
+        })
+        .catch(() => {
+          btn.innerText = "Error";
+          btn.disabled = false;
+        });
+      });
+    });
+  </script>
+  {% endif %}
+{% endif %}
+
+{% schema %}
+{
+  "name": "Sticky Add to Cart",
+  "target": "body"
+}
+{% endschema %}
