@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import { authenticate } from "../shopify.server";
 
@@ -237,9 +237,26 @@ export default function StickyCartIndex() {
             <h3 style={{ fontSize: "12px", fontWeight: "700", margin: 0, color: "#6d7175", textTransform: "uppercase", letterSpacing: "0.5px" }}>
               Live Preview ({position === "bottom" ? "Bottom" : "Top"})
             </h3>
-            <span style={{ fontSize: "12px", color: enabled ? "#008060" : "#8c9196", fontWeight: "600" }}>
-              {enabled ? "�� Active" : "�� Inactive"}
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <span
+                style={{
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  backgroundColor: enabled ? "#008060" : "#8c9196",
+                  display: "inline-block",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: "12px",
+                  color: enabled ? "#008060" : "#8c9196",
+                  fontWeight: "600",
+                }}
+              >
+                {enabled ? "Active" : "Inactive"}
+              </span>
+            </div>
           </div>
 
           <div style={{ 
