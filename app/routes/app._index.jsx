@@ -1,10 +1,15 @@
 ﻿import { useState, useEffect } from "react";
 import { useLoaderData, useFetcher } from "react-router";
-import { authenticate } from "../shopify.server";
+import {
+  authenticate,
+  MONTHLY_PLAN,
+  ANNUAL_PLAN,
+} from "../shopify.server";
 
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, billing } = await authenticate.admin(request);
 
+  let hasActivePayment = false;
   let settings = {
     enabled: true,
     position: "bottom",
@@ -22,6 +27,20 @@ export const loader = async ({ request }) => {
     imageUrl: null,
   };
 
+  // 1. 检查正式订阅状态（真实收费模式 isTest: false）
+  try {
+    if (billing && typeof billing.check === "function") {
+      const billingCheck = await billing.check({
+        plans: [MONTHLY_PLAN, ANNUAL_PLAN],
+        isTest: false,
+      });
+      hasActivePayment = Boolean(billingCheck?.hasActivePayment);
+    }
+  } catch (billingErr) {
+    console.warn("Billing check bypassed:", billingErr?.message || billingErr);
+  }
+
+  // 2. 查询 Metafield 设置 + 店铺真实商品（保持 2.2.1 合规）
   try {
     const response = await admin.graphql(`
       #graphql
@@ -70,13 +89,43 @@ export const loader = async ({ request }) => {
     console.error("GraphQL query error:", err);
   }
 
-  return Response.json({ settings, previewProduct });
+  return Response.json({ settings, previewProduct, hasActivePayment });
 };
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, billing, session } = await authenticate.admin(request);
   const formData = await request.formData();
+  const actionType = formData.get("actionType");
 
+  // 1. 发起正式订阅（真实扣费 isTest: false）
+  if (actionType === "subscribe") {
+    try {
+      const planType = formData.get("planType");
+      const selectedPlan = planType === "annual" ? ANNUAL_PLAN : MONTHLY_PLAN;
+      const returnUrl = `https://${session.shop}/admin/apps/${process.env.SHOPIFY_API_KEY}`;
+
+      await billing.request({
+        session,
+        plan: selectedPlan,
+        isTest: false,
+        returnUrl,
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        const redirectUrl =
+          error.headers.get("X-Shopify-API-Request-Failure-Reauthorize-Url") ||
+          error.headers.get("Location");
+
+        if (redirectUrl) {
+          return Response.json({ confirmationUrl: redirectUrl });
+        }
+        throw error;
+      }
+      throw error;
+    }
+  }
+
+  // 2. 保存插件配置
   try {
     const payload = {
       enabled: formData.get("enabled") === "true",
@@ -142,7 +191,7 @@ export const action = async ({ request }) => {
 };
 
 export default function StickyCartIndex() {
-  const { settings, previewProduct } = useLoaderData();
+  const { settings, previewProduct, hasActivePayment } = useLoaderData();
   const fetcher = useFetcher();
 
   const [enabled, setEnabled] = useState(Boolean(settings?.enabled ?? true));
@@ -155,7 +204,12 @@ export default function StickyCartIndex() {
 
   const [toastMsg, setToastMsg] = useState("");
 
-  const isSaving = fetcher.state === "submitting";
+  const isSaving =
+    fetcher.state === "submitting" && fetcher.formData?.get("actionType") === "save";
+  const submittingPlan =
+    fetcher.state === "submitting" && fetcher.formData?.get("actionType") === "subscribe"
+      ? fetcher.formData?.get("planType")
+      : null;
 
   useEffect(() => {
     if (fetcher.data?.success) {
@@ -167,8 +221,19 @@ export default function StickyCartIndex() {
     }
   }, [fetcher.data]);
 
+  useEffect(() => {
+    if (fetcher.data?.confirmationUrl) {
+      if (window.top) {
+        window.top.location.href = fetcher.data.confirmationUrl;
+      } else {
+        window.location.href = fetcher.data.confirmationUrl;
+      }
+    }
+  }, [fetcher.data]);
+
   const handleSave = () => {
     const data = new FormData();
+    data.append("actionType", "save");
     data.append("enabled", String(enabled));
     data.append("position", position);
     data.append("bgColor", bgColor);
@@ -176,6 +241,14 @@ export default function StickyCartIndex() {
     data.append("btnColor", btnColor);
     data.append("btnTextColor", btnTextColor);
     data.append("btnText", btnText);
+
+    fetcher.submit(data, { method: "post" });
+  };
+
+  const handleSubscribe = (planType) => {
+    const data = new FormData();
+    data.append("actionType", "subscribe");
+    data.append("planType", planType);
 
     fetcher.submit(data, { method: "post" });
   };
@@ -232,6 +305,98 @@ export default function StickyCartIndex() {
           </div>
         )}
 
+        {/* 双订阅计划展示区：月付 $39 / 年付 $289 */}
+        <div style={{ background: "#ffffff", borderRadius: "8px", padding: "20px", border: "1px solid #e1e3e5", marginBottom: "24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: hasActivePayment ? "0" : "18px" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <h2 style={{ fontSize: "16px", fontWeight: "700", margin: 0 }}>Subscription Plan</h2>
+                <span style={{ 
+                  backgroundColor: hasActivePayment ? "#c3e6cb" : "#e4e5e7", 
+                  color: hasActivePayment ? "#155724" : "#202223", 
+                  fontSize: "11px", 
+                  fontWeight: "600", 
+                  padding: "2px 8px", 
+                  borderRadius: "10px",
+                }}>
+                  {hasActivePayment ? "Pro Active" : "Free Plan"}
+                </span>
+              </div>
+              <p style={{ fontSize: "13px", color: "#6d7175", margin: 0 }}>
+                {hasActivePayment 
+                  ? "Your Pro subscription is active. Enjoy full customization and priority support." 
+                  : "Upgrade to Pro to unlock full bar positioning, custom brand colors, and unlimited conversions."}
+              </p>
+            </div>
+          </div>
+
+          {!hasActivePayment && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "12px" }}>
+              {/* 1. 月付选项：$39 */}
+              <div style={{ border: "1px solid #e1e3e5", borderRadius: "6px", padding: "16px", display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: "600", margin: "0 0 6px 0" }}>Monthly Plan</h3>
+                  <div style={{ fontSize: "22px", fontWeight: "700", color: "#202223", marginBottom: "6px" }}>
+                    $39 <span style={{ fontSize: "13px", color: "#6d7175", fontWeight: "normal" }}>/ month</span>
+                  </div>
+                  <p style={{ fontSize: "12px", color: "#6d7175", margin: 0 }}>Billed every 30 days. Cancel anytime.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSubscribe("monthly")}
+                  disabled={Boolean(submittingPlan)}
+                  style={{
+                    marginTop: "16px",
+                    backgroundColor: "#008060",
+                    color: "#ffffff",
+                    border: "none",
+                    padding: "9px 14px",
+                    borderRadius: "6px",
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    cursor: submittingPlan ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {submittingPlan === "monthly" ? "Redirecting..." : "Subscribe Monthly ($39/mo)"}
+                </button>
+              </div>
+
+              {/* 2. 年付选项：$289 */}
+              <div style={{ border: "2px solid #008060", borderRadius: "6px", padding: "16px", display: "flex", flexDirection: "column", justifyContent: "space-between", position: "relative", backgroundColor: "#fbfdfa" }}>
+                <span style={{ position: "absolute", top: "-10px", right: "12px", backgroundColor: "#008060", color: "#ffffff", fontSize: "10px", fontWeight: "700", padding: "2px 8px", borderRadius: "10px", textTransform: "uppercase" }}>
+                  Save ~38%
+                </span>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: "600", margin: "0 0 6px 0" }}>Annual Plan</h3>
+                  <div style={{ fontSize: "22px", fontWeight: "700", color: "#202223", marginBottom: "6px" }}>
+                    $289 <span style={{ fontSize: "13px", color: "#6d7175", fontWeight: "normal" }}>/ year</span>
+                  </div>
+                  <p style={{ fontSize: "12px", color: "#6d7175", margin: 0 }}>$24.08/mo equivalent. Billed once per year.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSubscribe("annual")}
+                  disabled={Boolean(submittingPlan)}
+                  style={{
+                    marginTop: "16px",
+                    backgroundColor: "#008060",
+                    color: "#ffffff",
+                    border: "none",
+                    padding: "9px 14px",
+                    borderRadius: "6px",
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    cursor: submittingPlan ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {submittingPlan === "annual" ? "Redirecting..." : "Subscribe Annual ($289/yr)"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Live Preview */}
         <div style={{ background: "#ffffff", borderRadius: "8px", padding: "20px", border: "1px solid #e1e3e5", marginBottom: "24px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
             <h3 style={{ fontSize: "12px", fontWeight: "700", margin: 0, color: "#6d7175", textTransform: "uppercase", letterSpacing: "0.5px" }}>
